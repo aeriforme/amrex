@@ -254,13 +254,26 @@ R2X<T>::R2X (Box const& domain,
 
     int myproc = ParallelContext::MyProcSub();
     int nprocs = std::min(ParallelContext::NProcsSub(), m_info.nprocs);
+    if (m_info.hasProcGrid()) {
+        AMREX_ALWAYS_ASSERT(m_info.nprocs <= ParallelContext::NProcsSub());
+        AMREX_ALWAYS_ASSERT(m_info.proc_grid[0] == 1);
+        nprocs = m_info.nprocs;
+    }
+    auto decompose = [&info, nprocs] (Box const& domain,
+                                     Array<bool,AMREX_SPACEDIM> const& decomp) {
+        if (info.hasProcGrid()) {
+            return detail::decompose(domain, info.proc_grid, decomp);
+        } else {
+            return amrex::decompose(domain, nprocs, decomp);
+        }
+    };
 
     //
     // make data containers
     //
 
     m_dom_rx = m_dom_0;
-    auto bax = amrex::decompose(m_dom_rx, nprocs, {AMREX_D_DECL(false,true,true)});
+    auto bax = decompose(m_dom_rx, {AMREX_D_DECL(false,true,true)});
     DistributionMapping dmx = detail::make_iota_distromap(bax.size());
     m_rx.define(bax, dmx, 1, 0, MFInfo().SetAlloc(false));
 
@@ -285,7 +298,7 @@ R2X<T>::R2X (Box const& domain,
             m_dom_cy = Box(IntVect(0), IntVect(AMREX_D_DECL(m_dom_cx.bigEnd(1),
                                                             m_dom_cx.bigEnd(0),
                                                             m_dom_cx.bigEnd(2))));
-            auto ba = amrex::decompose(m_dom_cy, nprocs, {AMREX_D_DECL(false,true,true)});
+            auto ba = decompose(m_dom_cy, {AMREX_D_DECL(false,true,true)});
             DistributionMapping dm;
             if (ba.size() == m_cx.size()) {
                 dm = m_cx.DistributionMap();
@@ -302,7 +315,7 @@ R2X<T>::R2X (Box const& domain,
             m_dom_ry = Box(IntVect(0), IntVect(AMREX_D_DECL(m_dom_rx.bigEnd(1),
                                                             m_dom_rx.bigEnd(0),
                                                             m_dom_rx.bigEnd(2))));
-            auto ba = amrex::decompose(m_dom_ry, nprocs, {AMREX_D_DECL(false,true,true)});
+            auto ba = decompose(m_dom_ry, {AMREX_D_DECL(false,true,true)});
             DistributionMapping dm;
             if (ba.size() == m_rx.size()) {
                 dm = m_rx.DistributionMap();
@@ -336,7 +349,7 @@ R2X<T>::R2X (Box const& domain,
             m_dom_cz = Box(IntVect(0), IntVect(AMREX_D_DECL(m_dom_cy.bigEnd(2),
                                                             m_dom_cy.bigEnd(1),
                                                             m_dom_cy.bigEnd(0))));
-            auto ba = amrex::decompose(m_dom_cz, nprocs, {AMREX_D_DECL(false,true,true)});
+            auto ba = decompose(m_dom_cz, {AMREX_D_DECL(false,true,true)});
             DistributionMapping dm;
             if (ba.size() == m_cy.size()) {
                 dm = m_cy.DistributionMap();
@@ -353,7 +366,7 @@ R2X<T>::R2X (Box const& domain,
             m_dom_rz = Box(IntVect(0), IntVect(AMREX_D_DECL(m_dom_ry.bigEnd(2),
                                                             m_dom_ry.bigEnd(1),
                                                             m_dom_ry.bigEnd(0))));
-            auto ba = amrex::decompose(m_dom_rz, nprocs, {AMREX_D_DECL(false,true,true)});
+            auto ba = decompose(m_dom_rz, {AMREX_D_DECL(false,true,true)});
             DistributionMapping dm;
             if (ba.size() == m_ry.size()) {
                 dm = m_ry.DistributionMap();

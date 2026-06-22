@@ -531,11 +531,19 @@ R2C<T,D,C>::R2C (Box const& domain, Info const& info)
 
     int myproc = ParallelContext::MyProcSub();
     int nprocs = std::min(ParallelContext::NProcsSub(), m_info.nprocs);
+    if (m_info.hasProcGrid()) {
+        AMREX_ALWAYS_ASSERT(m_info.nprocs <= ParallelContext::NProcsSub());
+        nprocs = m_info.nprocs;
+    }
 
 #if (AMREX_SPACEDIM == 3)
     if (m_info.domain_strategy == DomainStrategy::automatic) {
         if (m_info.twod_mode) {
             m_info.domain_strategy = DomainStrategy::slab;
+        } else if (m_info.hasProcGrid()) {
+            AMREX_ALWAYS_ASSERT(m_info.proc_grid[0] == 1);
+            m_info.domain_strategy = (m_info.proc_grid[1] > 1)
+                ? DomainStrategy::pencil : DomainStrategy::slab;
         } else {
             int shortside = m_real_domain.shortside();
             if (shortside < m_info.pencil_threshold*nprocs) {
@@ -556,9 +564,18 @@ R2C<T,D,C>::R2C (Box const& domain, Info const& info)
 #endif
 
     auto const ncomp = m_info.batch_size;
+    auto decompose = [this, nprocs] (Box const& domain,
+                                    Array<bool,AMREX_SPACEDIM> const& decomp,
+                                    bool no_overlap = true) {
+        if (m_info.hasProcGrid()) {
+            return detail::decompose(domain, m_info.proc_grid, decomp, no_overlap);
+        } else {
+            return amrex::decompose(domain, nprocs, decomp, no_overlap);
+        }
+    };
 
-    auto bax = amrex::decompose(m_real_domain, nprocs,
-                                {AMREX_D_DECL(false,!m_slab_decomp,m_real_domain.length(2)>1)}, true);
+    auto bax = decompose(m_real_domain,
+                         {AMREX_D_DECL(false,!m_slab_decomp,m_real_domain.length(2)>1)}, true);
 
     DistributionMapping dmx = detail::make_iota_distromap(bax.size());
     m_rx.define(bax, dmx, ncomp, 0, MFInfo().SetAlloc(false));
@@ -586,8 +603,8 @@ R2C<T,D,C>::R2C (Box const& domain, Info const& info)
         DistributionMapping cdmy;
         if ((m_real_domain.length(1) > 1) && !m_slab_decomp && !m_info.oned_mode)
         {
-            auto cbay = amrex::decompose(m_spectral_domain_y, nprocs,
-                                         {AMREX_D_DECL(false,true,true)}, true);
+            auto cbay = decompose(m_spectral_domain_y,
+                                  {AMREX_D_DECL(false,true,true)}, true);
             if (cbay.size() == dmx.size()) {
                 cdmy = dmx;
             } else {
@@ -602,8 +619,7 @@ R2C<T,D,C>::R2C (Box const& domain, Info const& info)
             m_real_domain.length(1) > 1 &&
             m_real_domain.length(2) > 1)
         {
-            auto cbaz = amrex::decompose(m_spectral_domain_z, nprocs,
-                                         {false,true,true}, true);
+            auto cbaz = decompose(m_spectral_domain_z, {false,true,true}, true);
             DistributionMapping cdmz;
             if (cbaz.size() == dmx.size()) {
                 cdmz = dmx;

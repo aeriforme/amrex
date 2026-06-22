@@ -107,6 +107,9 @@ struct Info
     //! Max number of processes to use
     int nprocs = std::numeric_limits<int>::max();
 
+    //! Explicit process grid. Zero means AMReX chooses the process grid.
+    IntVect proc_grid = IntVect::TheZeroVector();
+
     //! Whether OpenBCSolver pads internal FFT lengths for better performance.
     bool openbc_padding = true;
 
@@ -159,7 +162,30 @@ struct Info
      * \param n Maximum participating ranks.
      * \return Reference to this Info.
      */
-    Info& setNumProcs (int n) { nprocs = n; return *this; }
+    Info& setNumProcs (int n) {
+        nprocs = n;
+        proc_grid = IntVect::TheZeroVector();
+        return *this;
+    }
+    /**
+     * \brief Specify the process grid used by FFT layouts.
+     *
+     * The product of entries is the number of participating ranks. Directions
+     * that are not decomposed by a specific FFT layout must have an entry of one.
+     *
+     * \param pg Process grid.
+     * \return Reference to this Info.
+     */
+    Info& setProcGrid (IntVect const& pg) {
+        nprocs = 1;
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+            AMREX_ALWAYS_ASSERT(pg[idim] > 0);
+            nprocs *= pg[idim];
+        }
+        proc_grid = pg;
+        return *this;
+    }
+    [[nodiscard]] bool hasProcGrid () const { return proc_grid != IntVect::TheZeroVector(); }
     /**
      * \brief Enable or disable OpenBCSolver internal FFT padding.
      *
@@ -1671,6 +1697,70 @@ void Plan<T>::init_r2c (IntVectND<M> const& fft_size, void* pbf, void* pbb, bool
 namespace detail
 {
     DistributionMapping make_iota_distromap (Long n);
+
+    inline BoxArray decompose (Box const& domain, IntVect const& nprocs,
+                               Array<bool,AMREX_SPACEDIM> const& decomp,
+                               bool no_overlap = false)
+    {
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+            AMREX_ALWAYS_ASSERT(nprocs[idim] > 0);
+            AMREX_ALWAYS_ASSERT(decomp[idim] || nprocs[idim] == 1);
+        }
+
+        if (AMREX_D_TERM(nprocs[0],*nprocs[1],*nprocs[2]) <= 1) {
+            return BoxArray(domain);
+        }
+
+        Box const& ccdomain = amrex::enclosedCells(domain);
+        IntVect const& ncells = ccdomain.length();
+        IntVect const domlo = ccdomain.smallEnd();
+        IntVect const sz = ncells / nprocs;
+        IntVect const extra = ncells - sz*nprocs;
+        auto ixtyp = domain.ixType();
+        BoxList bl(ixtyp);
+#if (AMREX_SPACEDIM == 3)
+        for (int k = 0; k < nprocs[2]; ++k) {
+            int klo = (k < extra[2]) ? k*(sz[2]+1) : (k*sz[2]+extra[2]);
+            int khi = (k < extra[2]) ? klo+(sz[2]+1)-1 : klo+sz[2]-1;
+            klo += domlo[2];
+            khi += domlo[2];
+#endif
+#if (AMREX_SPACEDIM >= 2)
+            for (int j = 0; j < nprocs[1]; ++j) {
+                int jlo = (j < extra[1]) ? j*(sz[1]+1) : (j*sz[1]+extra[1]);
+                int jhi = (j < extra[1]) ? jlo+(sz[1]+1)-1 : jlo+sz[1]-1;
+                jlo += domlo[1];
+                jhi += domlo[1];
+#endif
+                for (int i = 0; i < nprocs[0]; ++i) {
+                    int ilo = (i < extra[0]) ? i*(sz[0]+1) : (i*sz[0]+extra[0]);
+                    int ihi = (i < extra[0]) ? ilo+(sz[0]+1)-1 : ilo+sz[0]-1;
+                    ilo += domlo[0];
+                    ihi += domlo[0];
+                    Box b{IntVect(AMREX_D_DECL(ilo,jlo,klo)),
+                          IntVect(AMREX_D_DECL(ihi,jhi,khi)), ixtyp};
+                    if (b.ok()) {
+                        if (no_overlap) {
+                            for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+                                if (ixtyp.nodeCentered(idim) &&
+                                    b.bigEnd(idim) == ccdomain.bigEnd(idim))
+                                {
+                                    b.growHi(idim, 1);
+                                }
+                            }
+                        } else {
+                            for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+                                if (ixtyp.nodeCentered(idim)) {
+                                    b.growHi(idim, 1);
+                                }
+                            }
+                        }
+                        bl.push_back(b);
+                    }
+        AMREX_D_TERM(},},})
+
+        return BoxArray(std::move(bl));
+    }
 
     template <typename FA>
     typename FA::FABType::value_type * get_fab (FA& fa)
